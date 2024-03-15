@@ -1,0 +1,99 @@
+// Define a module for UI console functionality
+
+// Function to create and return the console panel
+exports.setupUIConsole = function() {
+  var consolePanel = ui.Panel({
+    style: {
+      height: '500px',  // Adjust height as needed
+      width: '400px',   // Adjust width as needed
+      padding: '5px',
+      border: '3px solid black'
+    },
+    layout: ui.Panel.Layout.flow('vertical')
+  });
+
+  return consolePanel;
+};
+
+// Function to print messages to the console
+exports.printToConsole = function(consolePanel, message, color, isHeading) {
+  color = color || 'black'; // Default color is black
+  isHeading = isHeading || false; // Default is regular text
+
+  var textStyle = isHeading ? 
+    {color: color, margin: '2px', fontSize: '14px', fontWeight: 'bold'} : 
+    {color: color, margin: '2px', fontSize: '12px', fontWeight: 'normal'};
+
+  // Add new label with the message
+  var label = ui.Label({
+    value: message,
+    style: textStyle
+  });
+
+  consolePanel.widgets().add(label);
+
+  // Optional: Limit the number of messages in the console
+  if (consolePanel.widgets().length() > 10) {  // Adjust as needed
+    consolePanel.widgets().remove(0);  // Remove the first (oldest) widget
+  }
+};
+
+//Loading animation
+
+
+// Function to start the loading animation
+
+// Function to start the loading animation
+// Function to start the loading animation
+exports.startLoading = function(map, loadingText, eeObject, timeout) {
+    var loadingLabel = ui.Label(loadingText, {color: 'gray', fontSize: '16px', margin: '10px', textAlign: 'center'});
+    map.add(loadingLabel);
+
+    var loadingStyles = [
+        {text: loadingText, style: {color: 'red'}},
+        {text: loadingText + ' ...', style: {color: 'orange'}},
+        {text: loadingText + ' ......', style: {color: 'blue'}},
+        {text: loadingText + ' .........', style: {color: 'green'}}
+    ];
+    var currentLoadingIndex = 0;
+    var intervalKey;
+
+    // Function to update the loading style
+    var updateLoadingStyle = function() {
+        var currentStyle = loadingStyles[currentLoadingIndex];
+        loadingLabel.setValue(currentStyle.text);
+        loadingLabel.style().set(currentStyle.style);
+        currentLoadingIndex = (currentLoadingIndex + 1) % loadingStyles.length;
+    };
+
+    // Start the loading animation
+    var updateInterval = 500; // Update every 500ms
+    intervalKey = ui.util.setInterval(updateLoadingStyle, updateInterval);
+
+    // Function to stop the loading animation
+    function stopLoading() {
+        ui.util.clearTimeout(intervalKey);
+        map.remove(loadingLabel);
+    }
+
+    // Automatically stop the animation after the specified timeout, if provided
+    if (timeout) {
+        ui.util.setTimeout(stopLoading, timeout);
+    }
+
+    // If an Earth Engine object is provided, stop the animation when it's ready
+    if (eeObject) {
+        eeObject.evaluate(
+            function(result) { // Success callback
+                stopLoading();
+            },
+            function(error) { // Error callback
+                console.error('Error during EE object evaluation:', error);
+                stopLoading(); // Optionally stop loading on error, or handle differently
+            }
+        );
+    }
+
+    return loadingLabel;
+};
+

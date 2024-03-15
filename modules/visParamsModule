@@ -1,0 +1,68 @@
+// ====================== Visualization Parameters Module =======================
+// This module handles the visualization parameters for various layers.
+
+// ------ SAR Visualization Parameters ------
+// Defines the min and max values for the SAR image visualization.
+exports.sar = {
+  bands: ['VH'],
+  min: -25,   // Minimum value for SAR visualization
+  max: 0      // Maximum value for SAR visualization
+};
+
+// ------ Classified Layer Visualization Parameters ------
+// Visualization parameters for classified images, with a custom color palette.
+exports.classified = {min:0, max:1, palette:[ 'grey', 'blue']};
+
+// ------ AOI Visualization Parameters ------
+// Visualization parameters for the Area of Interest layer with a defined color.
+exports.aoi = {
+  min: 0,     // Minimum value for AOI visualization
+  max: 1,     // Maximum value for AOI visualization
+  palette: [  // Color palette for AOI
+    'yellow'  // Soft red/pink shade for AOI boundary
+  ] 
+};
+// ------ pannel Visualization Parameters ------
+exports.panel = {
+  style: {
+    position: 'bottom-right',
+    padding: '8px',
+    textAlign: 'center'
+  }
+};
+// ------ permanentWaterBodies Visualization Parameters ------
+
+exports.waterBodies = {
+ bands: ['waterClass'], 
+    min: 2.0, // Start from class 2, 'Seasonal water'
+    max: 3.0, // Include up to class 3, 'Permanent water'
+    palette: ['99d9ea', '0000ff'] // Light blue for 'Seasonal water', Blue for 'Permanent water'
+  
+};
+exports.dem = {
+  min: 0,     // Minimum elevation (sea level)
+  max: 1200,  // Approximate maximum elevation in Western Australia
+  palette: [
+     '76b349', // Vibrant green for the lowest elevations - lush vegetation
+    'a8c256', // Lighter green for low but slightly higher elevations
+    'e6e696', // Pale green transitioning to yellow - gentle elevation increase
+    'f7dc6f', // Bright yellow for moderate elevations - transitioning terrain
+    'db9e36', // Light brown - higher elevations, less vegetation
+    'a67f59', // Medium brown - higher yet, sparse vegetation
+    '8b4513'  // Dark brown - very high elevations, mountainous terrain
+    ]
+};
+
+exports.postProcessedCollection = {
+  min:0, max:1, palette:[ 'grey', 'red']
+}
+
+exports.sarCollection = {
+  bands: ['VH'],
+  min: -25,   // Minimum value for SAR visualization
+  max: 0      // Maximum value for SAR visualization
+};
+
+//UI Style Settings
+exports.bigHeader = {fontWeight: 'bold', fontSize: '14px'};
+exports.smallText = {fontSize: '12px'};
