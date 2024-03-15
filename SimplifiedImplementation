@@ -1,0 +1,249 @@
+// Simplified adaptation from RFSAR GUI Tool for standalone methodology implementation.
+
+// =============================================================================
+// ==================== User-Defined Settings and Hyperparameters ==============
+// =============================================================================
+
+
+// Area of Interest (AOI) and Subset Definitions
+var aoi = ee.FeatureCollection("projects/ee-tfmt/assets/aoi/finalAoi");
+var subsets = {
+  sub1: ee.FeatureCollection("projects/ee-tfmt/assets/ESMR504/2021_03_19_Bulahdelah/2021_03_19_Bulahdelah_aoi"),
+  sub2: ee.FeatureCollection("projects/ee-tfmt/assets/ESMR504/2021_03_19_Maitland/2021_03_19_Maitland_aoi")
+};
+
+// Observation Dates
+var observationDates = ['2021-03-19', '2021-03-24'];
+
+// Sample Collection for Model Training
+var sampleDictionary = {
+  '2021-03-19': ee.FeatureCollection("projects/ee-tfmt/assets/ESMR504/2021_03_19_Maitland/2021_03_19_Maitland_propSamp_579_21"),
+  '2021-03-24': ee.FeatureCollection("projects/ee-tfmt/assets/ESMR504/2021_03_24_Grafton/2021_03_24_Grafton_sample_539_61")
+};
+
+// Input Feature Configuration and Land Cover Source
+var inputFeatures = {
+  VV: true,
+  VH: true,
+  VVdivVH: false,
+  aspect: true,
+  slope: true,
+  hnd: true,
+  landCover: true
+};
+var landCoverSource = "projects/geoscience-aus-cat/assets/ga_ls_landcover_class_cyear_2"; 
+
+// Model Hyperparameters
+var modelParams = {
+  NoT: 100, // Number of trees in the Random Forest
+  scale: 30, // Scale in meters for model training and prediction
+  testFraction: 0.3 // Fraction of data to hold out for testing
+};
+
+// Post-Processing Parameters
+var postProcessing = {
+  applyConnectivityFilter: true,
+  connectivityRule: '4px-Neighbourhood',
+  minNeighborCount: 12,
+  applySlopeFilter: true,
+  maskWaterBodies: true,
+  waterBodiesYear: 2021,
+  slopePercentage: 8
+};
+
+// === Imports ===
+var s1 = ee.ImageCollection("COPERNICUS/S1_GRD"),
+    refinedLee = require('users/paulhosch/tfmt:refinedLee'), // Speckle filtering
+    meritHydro = ee.Image("MERIT/Hydro/v1_0_1"), // Terrain attributes
+    landCover = ee.ImageCollection(landCoverSource); // Contextual data
+
+// =============================================================================
+// ============================ Data Preperation ===============================
+// =============================================================================
+
+/**
+ * Compiles an ImageCollection by processing images from given observation dates. This involves
+ * filtering Sentinel-1 images by polarization, applying a speckle filter, and adding contextual
+ * bands like slope, aspect, and land cover.
+ *
+ * @param {Array} observationDates - An array of date strings representing the observation dates.
+ * @return {ee.ImageCollection} An ImageCollection with processed images for each observation date.
+ */
+function compileInputFeatureVector(observationDates) {
+  return ee.ImageCollection.fromImages(observationDates.map(function(dateString) {
+    var date = ee.Date(dateString),
+        nextDay = date.advance(1, 'day'),
+        filteredImages = s1.filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+                           .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
+                           .filter(ee.Filter.bounds(aoi))
+                           .filter(ee.Filter.date(date, nextDay))
+                           .select(["VV", "VH"]) // Select relevant bands
+                           .mosaic()
+                           .clip(aoi);
+    filteredImages = refinedLee.refinedLee(filteredImages); // Apply speckle filtering
+
+    // Add contextual bands
+    var bandsToAdd = [];
+    if (inputFeatures.slope) bandsToAdd.push(ee.Algorithms.Terrain(meritHydro.select('elv')).select('slope').rename('slope'));
+    if (inputFeatures.VVdivVH) bandsToAdd.push(filteredImages.select('VV').divide(filteredImages.select('VH')).rename('VV/VH'));
+    if (inputFeatures.aspect) bandsToAdd.push(ee.Algorithms.Terrain(meritHydro.select('elv')).select('aspect').rename('aspect'));
+    if (inputFeatures.hnd) bandsToAdd.push(meritHydro.select('hnd').rename('HAND'));
+    if (inputFeatures.landCover) bandsToAdd.push(landCover.filterDate('2020-01-01', '2021-01-01').select('level3').filterBounds(aoi).mean().rename('landCover'));
+
+    // Apply additional bands
+    bandsToAdd.forEach(function(band) { filteredImages = filteredImages.addBands(band); });
+    return filteredImages.set('date', date.format('YYYY-MM-dd'));
+  }));
+}
+
+// Initialize 
+var inputFeatureVector = compileInputFeatureVector(observationDates);
+print("Input Feature Vector Compiled: ", inputFeatureVector);
+
+
+// =============================================================================
+// ================ Model Training, Prediction, and Evaluation ================
+// =============================================================================
+
+/**
+ * Prepares training and testing samples by sampling the regions corresponding to feature collection points,
+ * then trains a Random Forest classifier using the training samples.
+ *
+ * @param {ee.Image} image - The image to sample from.
+ * @param {ee.FeatureCollection} samples - The collection of points to be used for sampling.
+ * @param {number} numTrees - Number of trees for the Random Forest classifier.
+ * @param {number} scale - The scale to use when sampling regions.
+ * @param {number} testFraction - The fraction of data to hold out for testing.
+ * @return {ee.Classifier} The trained classifier.
+ */
+function prepareAndTrainModel(image, samples, numTrees, scale, testFraction) {
+  var bands = image.bandNames();
+  // Split the samples by class.
+  var floodedSamples = samples.filter(ee.Filter.eq('class', 1));
+  var nonFloodedSamples = samples.filter(ee.Filter.eq('class', 0));
+
+  // Add a random column to each class's samples for splitting into training and testing.
+  floodedSamples = floodedSamples.randomColumn('random');
+  nonFloodedSamples = nonFloodedSamples.randomColumn('random');
+
+  // Define the training and testing splits based on the random column and the specified test fraction.
+  var trainingSplitFlooded = floodedSamples.filter(ee.Filter.lt('random', 1 - testFraction));
+  var testingSplitFlooded = floodedSamples.filter(ee.Filter.gte('random', 1 - testFraction));
+
+  var trainingSplitNonFlooded = nonFloodedSamples.filter(ee.Filter.lt('random', 1 - testFraction));
+  var testingSplitNonFlooded = nonFloodedSamples.filter(ee.Filter.gte('random', 1 - testFraction));
+
+  // Combine the class-specific training and testing splits.
+  var trainingSplit = trainingSplitFlooded.merge(trainingSplitNonFlooded);
+  var testingSplit = testingSplitFlooded.merge(testingSplitNonFlooded);
+
+
+// Use sampleRegions to add the input feature vector values to each sample as a property 
+  var trainingData = image.select(bands).sampleRegions({
+    collection: trainingSplit,
+    properties: ['class'],
+    scale: scale
+  });
+   var testingData = image.select(bands).sampleRegions({
+        collection: testingSplit,
+        properties: ['class'],
+        scale: scale
+    });
+
+    // Train the classifier with all bands/inputfeatures as properties 
+    var classifier = ee.Classifier.smileRandomForest(numTrees).train({
+        features: trainingData,
+        classProperty: 'class',
+        inputProperties: bands
+    });
+
+    return {
+      model: classifier,
+      training: trainingData, 
+      testing: testingData
+    } ; 
+}
+
+
+/**
+ * Predicts labels for an image using a trained classifier.
+ *
+ * @param {ee.Image} image - The image to classify.
+ * @param {ee.Classifier} classifier - The trained classifier.
+ * @return {ee.Image} The classified image.
+ */
+function predictModel(image, classifier) {
+  return image.classify(classifier);
+}
+
+/**
+ * Evaluates the model's performance using testing data.
+ *
+ * @param {ee.FeatureCollection} testingData - The testing samples.
+ * @param {ee.Classifier} classifier - The trained classifier.
+ * @return {Object} An object containing the error matrix and accuracy.
+ */
+function evaluateModel(testingData, classifier) {
+  var tested = testingData.classify(classifier);
+  var errorMatrix = tested.errorMatrix('class', 'classification');
+  return {
+    errorMatrix: errorMatrix,
+    accuracy: errorMatrix.accuracy()
+  };
+}
+
+/**
+ * Classifies an image, evaluates the model, and sets metadata.
+ *
+ * @param {ee.Image} image - The image to classify.
+ * @param {Object} sampleDictionary - A dictionary mapping dates to sample collection IDs.
+ * @param {number} numTrees - Number of trees in the Random Forest.
+ * @param {number} testFraction - Fraction of samples to hold out for testing.
+ * @return {ee.Image} The classified image with added metadata.
+ */
+function classifyImage(image, sampleDictionary, numTrees, testFraction) {
+  var dateString = image.get("date");
+  var samples = ee.FeatureCollection(ee.Dictionary(sampleDictionary).get(dateString));
+  
+  var classifier = prepareAndTrainModel(image, samples, modelParams.NoT, modelParams.scale, modelParams.testFraction);
+  
+  var classified = predictModel(image, classifier.model).set('date', dateString);
+  
+  var evaluationResults = evaluateModel(classifier.testing, classifier.model);
+  
+  classified = classified.set({
+    'trainingSize': classifier.training.size(),
+    'testingSize': classifier.testing.size(),
+    'testingAccuracy': evaluationResults.accuracy
+  });
+  
+  return classified;
+}
+
+/**
+ * Processes a collection of images for classification, evaluation, and metadata assignment.
+ *
+ * @param {Object} sampleDictionary - A dictionary mapping dates to sample collection IDs.
+ * @param {number} numTrees - Number of trees in the Random Forest.
+ * @param {number} testFraction - Fraction of samples to hold out for testing.
+ */
+function classifyCollection(sampleDictionary, numTrees, testFraction) {
+  var classifiedCollection = inputFeatureVector.map(function(image) {
+  
+    return classifyImage(image, sampleDictionary, numTrees, testFraction);
+  });
+  
+  print("Model Prediction and Evaluation:", classifiedCollection);
+  return classifiedCollection;
+}
+
+// Execute 
+var classifiedCollection= classifyCollection(sampleDictionary, modelParams.NoT, modelParams.testFraction);
+
+var visParams = {
+  min: 0,  // Adjust based on your classification labels
+  max: 1,  // Adjust based on your classification labels
+  palette: [ 'green', 'blue',] // Adjust colors based on your classification categories
+};
+
+ Map.addLayer(classifiedCollection.first(), visParams, "first results");
