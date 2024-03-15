@@ -1,0 +1,5 @@
+# Environment
+
+Google Earth Engine (GEE) provides a powerful cloud-based platform for geospatial analysis on a planetary scale. The backbone of GEE is its multi-petabyte, analysis-ready data catalogue. The data catalogue includes a wide range of geospatial datasets, encompassing observations from various satellite systems, environmental variables, and datasets related to weather, climate, land cover, and topography. Coupled with the in-house implementation of Random Forest, and its substantial computational resources, GEE stands as the ideal platform for the use case addressed in this study.
+
+[Back to main page](README.md)
